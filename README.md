@@ -15,7 +15,7 @@ years of the group.
 | 2011 December 14       | [non_ply.r](https://github.com/DenverRUG/meetup-file-archive/blob/master/non_ply.r) | Brief overview of functions from the plyr package other than the \*\*ply family, e.g., for ordering data.frames, operating columnwise on a df, counting combinations of values, adding new vars to a df (like transform), and renaming vars in a df. |
 | 2011 December 14       | [RGoogleAnalytics_DenverRUG.pdf](https://github.com/DenverRUG/meetup-file-archive/blob/master/RGoogleAnalytics_DenverRUG.pdf) | A quick overview of the RGoogleAnalytics package and how you can use it to better track mulitple Google Analytics accounts with R. |
 | 2011 December 14       | [rprofile.pdf](https://github.com/DenverRUG/meetup-file-archive/blob/master/rprofile.pdf) | |
-| 2012 February 2        | [R and BigData.ppt](https://github.com/DenverRUG/meetup-file-archive/blob/master/) | A short presentation on using R in a Hadoop streaming job. |
+| 2012 February 2        | [R and BigData.ppt](https://github.com/DenverRUG/meetup-file-archive/blob/master/R%20and%20BigData.ppt) | A short presentation on using R in a Hadoop streaming job. |
 |                        | [](https://github.com/DenverRUG/meetup-file-archive/blob/master/) | |
 |                        | [](https://github.com/DenverRUG/meetup-file-archive/blob/master/) | |
 |                        | [](https://github.com/DenverRUG/meetup-file-archive/blob/master/) | |
