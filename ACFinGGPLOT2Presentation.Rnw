@@ -1,0 +1,923 @@
+\documentclass{beamer}
+
+\usepackage{beamerthemesplit}
+\usepackage{graphics,graphicx}
+\usepackage{ulem,color}
+\usepackage{verbatim}
+\usepackage{Sweave}
+\usepackage{array}
+\usepackage{url}
+
+
+
+\newcommand{\Rlogo}{\protect\includegraphics[height=2.1ex,keepaspectratio]{rlogo.png}}
+\newcommand{\bsy}{\boldsymbol{y}}
+
+%These two lines overwrite the default settings for Sweave and adds color.
+\DefineVerbatimEnvironment{Sinput}{Verbatim}{formatcom=\color{blue}}
+\DefineVerbatimEnvironment{Soutput}{Verbatim}{formatcom=\color{red}}
+
+%Beamer Theme
+\usetheme{Darmstadt}
+
+
+\title{Creating an Autocorrelation Plot in \texttt{ggplot2}}
+\author{Peter DeWitt \\ dewittpe@gmail.com}
+\date{18 January 2011}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%
+
+\begin{document}
+
+% A couple things needed for Sweave
+\SweaveOpts{engine=R, prefix.string=images/}
+\setkeys{Gin}{width=2.25in}
+
+
+
+%title frame
+\frame{ \begin{center} \Huge Denver \Rlogo\ User Group \end{center} \titlepage }
+
+%outline frame
+\section[Outline]{}
+\frame{\tableofcontents}
+
+%objective frame
+\section{Objectives}
+\frame{
+	\begin{itemize}
+		\item Show the thought process and coding to make a custom \texttt{ggplot2} style ACF plot.
+			\begin{itemize}
+				\item Show some of the errors and solutions to them.
+				\item Give an overview of the construction of the plots using layers.
+				\item Show how to use the base \Rlogo\ functions to generate the data needed for the \texttt{ggplot2} graphics.
+			\end{itemize}
+		\item Provide an example of creating a \LaTeX, in this case a Beamer, document using \texttt{Sweave}.
+	\end{itemize}
+}
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Motivation}
+\frame{
+  \frametitle{Need an Autocorrelation Plot}
+\begin{itemize}
+\item While working on a homework assignment for an introductory Bayesian course I needed an autocorrelation plot to investigate the convergence of a MCMC algorithm.  
+
+\item I had used \texttt{ggplot2} for creating all the plots in the report, but when looking for the autocorrelation in the simulated parameter values I found that there was no option in the \texttt{ggplot2} library for ACF Plots.
+
+\item Not wanting to use the base \Rlogo\ \texttt{acf()} plot I though I should make my own using \texttt{ggplot2}.
+
+\item The function in this talk shows the one I used for the assignment and then a more generalized function I started to write for future use.
+\end{itemize}
+}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% To get the data set I used for the presentation you'll need to run this R code
+%%% The Sweave here is using the options echo = false and results = hide so that none of
+%%% this code is seen in the final document.  It is evaluated so that the data set is 
+%%% generated and can be used in the code chunks that follow.
+
+<<Data Loads and Gibbs Sampler, echo = false, results = hide>>=
+setwd("~/Documents/DRUGPresentation")
+image.dir <- "~/Documents/DRUGPresentation/images/"
+
+library(ggplot2)
+setEPS()
+
+# Load the simulated values of the two parameters theta and tau
+# if the file does not exist then run the simulation and save the results
+if(file.exists("params.r")){ load("params.r") }
+
+#The simulation will only run if the object params was not found
+if(!exists("params")){
+# Treatment Recurrence 
+trtR <<- c(2,  4,  6,  9,  9,  9, 13, 14, 18, 23, 31, 32, 33, 34, 43);
+
+# Treatment Censoring  
+trtC <<- c(10, 14, 14, 16, 17, 18, 
+	18, 19, 20, 20, 21, 21,	23, 24, 29, 29, 30, 30,
+	31, 31, 31, 33, 35, 37,	40, 41, 42, 42, 44, 46,
+	48, 49, 51, 53, 54, 54,	55, 56);
+
+# Control Recurrence 
+cntR <<- c(1, 4, 6, 7, 13, 24, 25, 35, 35, 39);
+
+# Control Censoring  
+cntC <<- c(1, 1, 3, 4, 5, 8,
+	10, 11, 13, 14, 14, 15,	17, 19, 20, 22, 24, 24,
+	24, 25, 26, 26, 26, 28,	29, 29, 32, 35, 38, 39,
+	40, 41, 44, 45, 47, 47,	47, 50, 50, 51)
+
+aa <- 3; bb <- 1; cc <- 50; dd <- 120;
+
+#set initial values for the parameters
+theta <- c(0.01); tau <- c(1);
+
+sum.delta.h <- length(trtR)
+sum.delta.c <- length(cntR)
+sum.h <- sum(c(trtR, trtC))
+sum.c <- sum(c(cntR, cntC))
+
+sims <- 25000;
+
+set.seed(42)
+
+for( i in 1:sims ){
+	theta <- c(theta, rgamma(1, shape = (sum.delta.h + sum.delta.c + aa + 1), rate = sum.c + tau[i]*(sum.h+dd) + cc));
+	tau <- c(tau, rgamma(1, shape = sum.delta.h + bb + 1, rate = theta[i+1]*(sum.h + dd)));
+}
+
+params <- data.frame(theta, tau)
+save(params, file = "params.r")
+} #end if statement for the simulation
+
+@
+
+
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Development of the ACF Plot
+
+\section{Development of the ACF Plot}
+\subsection{The Data Set}
+
+%The fragile option is needed for the R code to run.  For Beamer, if possible, you may find it easier to keep the R code outside of the frames.  If the frame is not fragile then the R code will result in an error.
+
+\begin{frame}[fragile]
+	\frametitle{The Data Set and some Syntax}
+The goal of the assignment was to find the posterior distribution for two parameters $\theta$ and $\tau$.  The simulated values from the MCMC simulations where stored in a data frame called \texttt{params}.
+
+<<Show the head of the params data frame>>=
+dim(params);head(params)
+@
+\end{frame}
+
+
+
+\subsection{For One Variable}
+\begin{frame}[fragile] 
+\begin{columns}
+\begin{column}{0.5\textwidth}
+% the fig = true option here will produce a figure and save it so that it can be imported into the final presentation.  The best thing to do to see what happens is look at the .tex file produced.  the option eps = false is used so that only a pdf graphic will be generated.  by default Sweave will produce both an eps and pdf graphic.  Since this is a Beamer file and only pdf graphics are needed I have set eps = false
+
+% Name of this chunk needs to have no white space so that the figure can be found when compiling the final document.
+<<BasicACFPlotTheta, fig=true, eps=false>>=
+acf(with(params, theta))
+@
+\end{column}
+
+\begin{column}{0.5\textwidth}
+<<BasicACFPlotTau, fig=true, eps=false>>=
+acf(with(params, tau))
+@
+
+\end{column}
+\end{columns}
+
+\small
+Small note: the use of the \texttt{with} command is used here because of color coding issues in the text editor I use and the \LaTeX\ command \$.
+\end{frame}
+
+	
+\frame{	\frametitle{Where to start?}
+	\begin{itemize}
+	\item The ACF Plots in the base \Rlogo\ package could be improved on.
+	\item What do I need to create one?
+		\begin{itemize}
+			\item Calculate the correlation for each lag between 1 and, uh\ldots, a big number
+			\item Store the different correlations in a data frame and then\ldots
+		\end{itemize}
+	\item \emph{WAIT!}  Before wasting time to build a whole new function see what is already generated from the \texttt{acf()} function.
+	\end{itemize}
+}
+
+\begin{frame}[fragile]
+	\frametitle{What is in the \texttt{acf()} function?}
+\scriptsize
+<< >>=
+p <- acf(with(params, theta), plot = FALSE)
+summary(p)
+p
+@
+\end{frame}
+
+\begin{frame}[fragile]
+\frametitle{Start of the acf plot} \framesubtitle{Data Manipulation and first steps with a bar plot}
+\scriptsize
+<< >>=
+baseACF <- with(p, data.frame(lag, acf))
+head(baseACF, 3)
+@
+
+% Because the following code results in an error it is placed in a verbatim environment and not a 
+% R code section because the error would not allow the rest of the code to compile.
+
+\begin{verbatim}
+> qplot(lag, acf, data = baseACF, geom = "bar")
+stat_bin: binwidth defaulted to range/30. Use 'binwidth = x' to adjust this.
+Error in pmin(y, 0) : object 'y' not found
+\end{verbatim}
+
+Fix this error by using the argument: \texttt{stat\_identity}.  This will keep the lags as is and will not bin them together. 
+
+\begin{verbatim}
+> qplot(lag, acf, data = baseACF, geom = "bar", stat = "identity")
+Warning message:
+Stacking not well defined when ymin != 0
+\end{verbatim}
+
+Fix this error with the argument: \texttt{position\_identity}.
+\end{frame}
+
+
+
+\begin{frame}[fragile]
+\frametitle{First Iteration of the \texttt{ggplot2} style ACF Plot}
+
+\begin{columns}[b]
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig=true, eps=false>>=
+q <- qplot(x = lag, y = acf, data = baseACF, geom = "bar",
+ stat="identity", position = "identity") 
+print(q)
+@
+\end{column}
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig = true, eps = false>>=
+acf(with(params, theta))
+@
+\end{column}
+\end{columns}
+\end{frame}
+
+
+
+\begin{frame}[fragile]
+\frametitle{Adding Confidence Intervals}
+It will be beneficial to start writing a function. \vspace{.1in}
+
+\scriptsize
+<< >>=
+qacf <- function(x, conf.level = 0.95){
+	ciline <- qnorm((1-conf.level)/2)/sqrt(length(x))
+
+	bacf <- acf(x, plot = FALSE)
+	bacfdf <- with(bacf, data.frame(lag, acf))
+
+	q <- qplot(lag, acf, data=bacfdf, geom="bar", stat="identity", position="identity", ylab="Autocorrelation")
+	q <- q + geom_hline(yintercept = -ciline, color="blue", size = 0.2)  
+	q <- q + geom_hline(yintercept = ciline,  color="blue", size = 0.2) 
+	q <- q + geom_hline(yintercept = 0,       color="red",  size=0.3)	
+
+	return(q)
+}
+@
+
+\hfill
+
+\small The syntax has each layer added to the plot one at a time.  \texttt{Sweave} does not preserve linebreaks in a single line of code.  This is because of the use of the \texttt{parse()} and \texttt{deparse()} functions calls in \Rlogo.
+\end{frame}
+
+
+
+\begin{frame}[fragile]
+\frametitle{What does it look like now?}
+\begin{columns}[b]
+\begin{column}{0.5\textwidth}
+\scriptsize
+% because ggplot2 does not produce graphics the same way that the base R package does 
+% to get Sweave to add the image to the document you need to use the print function.
+<<fig=true, eps = false >>=
+p <- qacf(with(params,theta))
+print(p)
+@
+\end{column}
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig=true, eps=false>>=
+acf(with(params, theta))
+@
+\end{column}
+\end{columns}
+\end{frame}
+
+
+
+\begin{frame}[fragile]
+\frametitle{How many lags to display?}
+How many lags should be displayed?  There is a default setting in the \texttt{acf()} function.  
+
+A few lines of code from the base \Rlogo\ acf function:
+
+\scriptsize
+\begin{verbatim}
+> acf
+function (x, lag.max = NULL, type = c("correlation", "covariance", 
+    "partial"), plot = TRUE, na.action = na.fail, demean = TRUE, 
+    ...) 
+{
+
+    sampleT <- nrow(x)
+    nser <- ncol(x)
+    if (is.null(lag.max)) 
+        lag.max <- floor(10 * (log10(sampleT) - log10(nser)))
+    lag.max <- min(lag.max, sampleT - 1)
+    if (lag.max < 0) 
+        stop("'lag.max' must be at least 0")
+
+\end{verbatim}
+\end{frame}
+
+
+
+\begin{frame}[fragile]
+\frametitle{What about the lags?}
+\scriptsize
+<< >>=
+qacf <- function(x, conf.level = 0.95, max.lag = NULL, min.lag = 0){
+#	min.lag <- floor(min.lag)
+#	if(min.lag < 0){stop("min.lag needs to exceed 0")}
+#	if(!is.null(max.lag) && max.lag <= min.lag){stop("max.lag needs to exceed min.lag")}
+#	if(conf.level >= 1 || conf.level <= 0){stop("conf.level out of bounds.")}
+
+	ciline <- qnorm((1-conf.level)/2)/sqrt(length(x))
+
+	bacf <- acf(x, plot = FALSE, lag.max = max.lag)
+	bacfdf <- with(bacf, data.frame(lag, acf))
+	if(min.lag > 0){bacfdf <- bacfdf[-seq(1,min.lag),]}
+
+	q <- qplot(lag, acf, data=bacfdf, geom="bar", stat="identity", position="identity", ylab="Autocorrelation")
+	q <- q + geom_hline(yintercept = -ciline, color="blue", size = 0.2)  
+	q <- q + geom_hline(yintercept = ciline,  color="blue", size = 0.2) 
+	q <- q + geom_hline(yintercept = 0,       color="red",  size=0.3)	
+
+	return(q)
+}
+@
+\end{frame}
+
+
+
+\begin{frame}[fragile]
+\frametitle{A Couple Quick Examples} \framesubtitle{Example 1}
+\begin{columns}[b]
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<example1, fig=true, eps=false>>=
+p <- qacf(with(params,theta), 	conf.level = 0.99, max.lag = 15)
+print(p)
+@
+\end{column}
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig=true, eps = false >>=
+acf(with(params, theta), ci = .99, lag.max = 15)
+@
+\end{column}
+\end{columns}
+\end{frame}
+
+
+
+\begin{frame}[fragile]
+\frametitle{A Couple Quick Examples} \framesubtitle{Example 2}
+\begin{columns}[b]
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<example2, fig=true, eps=false >>=
+p <- qacf(with(params,theta), conf.level = 0.98, min.lag = 1, max.lag = 15)
+print(p)
+@
+\end{column}
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<example3, fig = true, eps = false >>=
+p <- p + ylim(-0.1, 0.75)
+print(p)
+@
+\end{column}
+\end{columns}
+\end{frame}
+
+
+
+
+\begin{frame}[fragile]
+\frametitle{Which Lags are Significance?}
+Mark the lags which are significantly different from 0.  The ability to added a title to the plot has also been added.
+
+\tiny
+<< >>=
+qacf <- function(x, conf.level = 0.95, max.lag = NULL, min.lag = 0, title = ""){
+	ciline <- qnorm((1-conf.level)/2)/sqrt(length(x))
+
+	bacf <- acf(x, plot = FALSE, lag.max = max.lag)
+	bacfdf <- with(bacf, data.frame(lag, acf))
+	if(min.lag > 0){bacfdf <- bacfdf[-seq(1,min.lag),]}
+	significant <- (abs(bacfdf[,2]) > abs(ciline))^2
+	bacfdf <- cbind(bacfdf, significant)
+
+	q <- qplot(lag, acf, data=bacfdf, geom="bar", stat="identity", position="identity", ylab="Autocorrelation", main=title, fill = factor(significant))
+	q <- q + geom_hline(yintercept = -ciline, color="blue", size = 0.2)  
+	q <- q + geom_hline(yintercept = ciline,  color="blue", size = 0.2) 
+	q <- q + geom_hline(yintercept = 0,       color="red",  size=0.3)	
+	q <- q + scale_fill_hue(name = paste("Significant at the\n", conf.level, "level"), breaks = 0:1, labels = c("False", "True"))
+	return(q)
+}
+@
+\end{frame}
+
+\begin{frame}[fragile]
+\frametitle{Example}
+\begin{columns}[b]
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<lagexample, fig=true, eps=false >>=
+p <- qacf(with(params,theta), title = expression(paste("ACF Plot for ", theta)))
+print(p)
+@
+\end{column}
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<lagexample2, fig=true, eps = false, echo = false>>=
+p <- qacf(with(params,theta), title = expression(paste("ACF Plot for ", theta)), max.lag = 12)
+print(p)
+@
+\end{column}
+\end{columns}
+
+
+\end{frame}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% The General ACF Function
+\subsection{A More General ACF Plot Function}
+\begin{frame}[fragile]
+\frametitle{ACF plots for more than one variable}
+\begin{columns}
+\begin{column}{0.5\textwidth}
+\small
+\begin{itemize}
+	\item The \texttt{qacf()} function so far will only work for a single vector.  
+	\item What if we are interested in a data frame with more than one series in it?  The plot shown on the right is the \Rlogo\ base \texttt{acf()} plot for two series.  
+
+	\item How can we create a similar plot in \texttt{ggplot2}?  
+	\begin{itemize} \item Use some data manipulation and a few tweaks to the \texttt{qacf()} function. \end{itemize}
+\end{itemize}
+\end{column}
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<baseGeneralAcfPlot, fig = true, eps = false>>=
+acf(params)
+@
+\end{column}
+\end{columns}
+\end{frame}
+
+
+
+\begin{frame}[fragile]
+\frametitle{What do we get from the base \texttt{acf()} function?}
+\scriptsize
+<< >>=
+summary(acf(params, plot = FALSE))
+with(acf(params, plot = FALSE), acf)
+@
+\end{frame}
+
+\begin{frame}
+	\frametitle{What do we get from the base \texttt{acf()} function?}
+\small
+\begin{itemize} 
+	\item First bit of good news, the names for the object returned by the \texttt{acf()} function are the same as when only one series was passed into the function.
+	\begin{itemize}
+		\item \texttt{acf}: a 3D array with the numeric values for the \texttt{type} of plot.  The [,,1] is the first column of plots in the produced graphic.
+		\item \texttt{type}: is the plot for correlation? covariance? or a partial autocorrelation plot?
+		\item \texttt{n.used}: length of the series
+		\item \texttt{lag}: a vector of the lags to be plotted with the correct value stored in \texttt{acf}.
+		\item \texttt{series}: name of the object passed into the \texttt{acf()} function.
+		\item \texttt{snames}: names of the columns in the data frame passed into the \texttt{acf()} function.
+	\end{itemize}
+	
+	\item By manipulating the data in \texttt{acf} and \texttt{lag} into a new data frame we should be able to generate a similar graphic using \texttt{ggplo2}.
+	
+\end{itemize}
+\end{frame}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\section{Final Result}
+\subsection{Finished \texttt{qacf()} Function}
+\begin{frame}[fragile]
+\frametitle{The finished \texttt{qacf()} function}
+\begin{itemize}
+\item The code for the \texttt{qacf()} function has change quite a bit to account for the data sets and some plotting options.
+
+\item The final code for the \texttt{acf()} function is too long for a Beamer slide.  We'll look over the code in the \texttt{.R} file extracted by the Sweave function \texttt{Stangle()}.
+\end{itemize}
+
+<<Finished qacf function, echo = false>>=
+qacf <- function(x, conf.level = 0.95, lag.max = NULL, type = c("correlation", "covariance", 
+    "partial"), show.sig = FALSE, title = NULL){
+
+	series <- deparse(substitute(x))
+
+	x <- as.data.frame(x)
+
+	bacf <- acf(x, plot = FALSE, lag.max = lag.max, type = type)
+
+	ciline <- qnorm((1-conf.level)/2) / sqrt(with(bacf, n.used))
+
+	bacfsnames <- with(bacf, snames)
+
+	bacfacf <- as.data.frame(with(bacf, acf)) 
+	bacflag <- as.data.frame(with(bacf, lag))
+	bacfdf <- cbind(melt(bacflag), melt(bacfacf)[,2])
+	significant <- (abs(bacfdf[,3]) > abs(ciline))^2
+	bacfdf <- cbind(bacfdf, significant)
+
+	
+	if(dim(x)[2] > 1){
+	
+		vars <- length(bacfsnames)	
+		lags <- dim(bacflag)[1]
+		column <- c(); row <- c()
+
+		#the row and column vectors are defined this way so that the facet_wrap will work
+		for(i in 1:vars){
+			row <- c(row, rep(bacfsnames[i], lags*vars))
+			for(j in 1:vars){
+				column <- c(column, rep(bacfsnames[j], lags))
+			}
+		}
+		row <- factor(row, levels = bacfsnames)
+		column <- factor(column, levels = bacfsnames)
+		bacfdf <- cbind(bacfdf, row, column)
+		names(bacfdf) <- c("plot", "lag", "acf", "significant", "row", "column")
+	}else{
+		names(bacfdf) <- c("plot", "lag", "acf", "significant")
+	}
+
+	q <- ggplot(data = bacfdf, aes(x = lag, y = acf)) + 
+	geom_bar(stat="identity", position="identity") + 
+	ylab(with(bacfdf, type))
+
+	if(dim(x)[2] > 1){
+		q <- q + facet_wrap(column ~ row, scales = "free_x")
+	}
+
+	if(is.null(title)){
+		q <- q + opts(title = series)
+	}else{
+		q <- q + opts(title = title)
+	}
+
+	if(with(bacf,type) %in% c("correlation", "partial")){
+	q <- q + geom_hline(yintercept = -ciline, color="blue", size = 0.2)  
+	q <- q + geom_hline(yintercept = ciline,  color="blue", size = 0.2) 
+	q <- q + geom_hline(yintercept = 0,       color="red",  size=0.3)	
+	
+		if(show.sig){ 
+			q <- q + aes(fill = factor(significant))
+			q <- q + scale_fill_hue(name = paste("Significant at the\n", conf.level, "level"), breaks = 0:1, labels = c("False", "True")) 
+		}
+	}
+	return(q)
+}
+@
+
+\end{frame}
+
+
+
+\subsection{Examples}
+\begin{frame}[fragile]
+	\frametitle{\texttt{qacf()} vs. \texttt{acf()}}
+\begin{columns}[b]
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig = true, eps = false>>=
+p <- qacf(params, show.sig = TRUE)
+print(p)
+@
+\end{column}
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig = true, eps = false>>=
+acf(params)
+@
+\end{column}
+\end{columns}
+\end{frame}
+
+\begin{frame}[fragile]
+	\frametitle{\texttt{qacf()} vs. \texttt{acf()}}
+\begin{columns}[b]
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig = true, eps = false>>=
+p <- qacf(params, lag.max = 15, show.sig = TRUE)
+print(p)
+@
+\end{column}
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig = true, eps = false>>=
+acf(params, lag.max = 15)
+@
+
+\end{column}
+\end{columns}
+\end{frame}
+
+
+
+\subsection{More Complex Examples}
+\subsubsection{3 Series Example}
+\begin{frame}[fragile]
+A random set of three series to use:
+\scriptsize
+<< >>=
+set.seed(42)
+n <- 250
+
+alpha <- c(5); beta <- c(5); gamma <- c(5);
+
+Z.1 <- rnorm(n, 0, 1)
+Z.2 <- rnorm(n, 0, 2)
+Z.3 <- rnorm(n, 0, 5)
+
+for(i in 2:n)
+{
+	alpha[i] <- alpha[i-1] + 2 * Z.1[i] + 3.14 * Z.1[i-1]
+	beta[i] <- beta[i-1] - 2 * Z.2[i] + Z.2[i-1]
+	gamma[i] <- gamma[i-1] * 0.2* Z.3[i] + 4.31 * Z.3[i-1]
+}
+testdf <- data.frame(alpha, beta, gamma)
+@
+\end{frame}
+
+\begin{frame}[fragile]
+\begin{columns}[b]
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig = true, eps = false>>=
+p <- qacf(testdf)
+print(p)
+@
+\end{column}
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig = true, eps = false>>=
+acf(testdf)
+@
+\end{column}
+\end{columns}
+\end{frame}
+
+\begin{frame}[fragile]
+\begin{columns}[b]
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig = true, eps = false>>=
+p <- qacf(testdf, show.sig = TRUE)
+print(p)
+@
+\end{column}
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig = true, eps = false>>=
+acf(testdf)
+@
+\end{column}
+\end{columns}
+\end{frame}
+
+\begin{frame}[fragile]
+\begin{columns}[b]
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig = true, eps = false>>=
+p <- qacf(testdf, type = "covariance")
+print(p)
+@
+\end{column}
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig = true, eps = false>>=
+acf(testdf, type = "covariance")
+@
+\end{column}
+\end{columns}
+\end{frame}
+
+\begin{frame}[fragile]
+\begin{columns}[b]
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig = true, eps = false>>=
+p <- qacf(testdf, type = "partial")
+print(p)
+@
+\end{column}
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig = true, eps = false>>=
+acf(testdf, type = "partial")
+@
+\end{column}
+\end{columns}
+\end{frame}
+
+\begin{frame}[fragile]
+\begin{columns}[b]
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig = true, eps = false>>=
+p <- qacf(testdf, type = "partial", show.sig = TRUE)
+print(p)
+@
+\end{column}
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig = true, eps = false>>=
+acf(testdf, type = "partial")
+@
+\end{column}
+\end{columns}
+\end{frame}
+
+\subsubsection{4 Series Example}
+\begin{frame}[fragile]
+\frametitle{4 Series Example}
+\scriptsize
+<<>>=
+n <- 250
+
+alpha <- c(5); beta <- c(5); gamma <- c(5); delta <- c(5)
+
+Z.1 <- rnorm(n, 0, 1)
+Z.2 <- rnorm(n, 0, 2)
+Z.3 <- rnorm(n, 0, 5)
+
+for(i in 2:n)
+{
+	alpha[i] <- alpha[i-1] + Z.1[i] - Z.1[i-1] + delta[i-1] - beta[i-1]
+	beta[i] <- beta[i-1] - 2 * Z.2[i] + Z.2[i-1] - delta[i-1]
+	gamma[i] <- gamma[i-1] + beta[i-1] + 0.2 * Z.3[i] + Z.3[i-1]
+	delta[i] <- delta[i-1] + runif(1,0.5, 1.5)*delta[i-1]
+}
+testdf <- data.frame(alpha, beta, gamma, delta)
+@ 
+\end{frame}
+
+\begin{frame}[fragile]
+\begin{columns}[b]
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig = true, eps = false>>=
+p <- qacf(testdf)
+print(p)
+@
+\end{column}
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig = true, eps = false>>=
+acf(testdf)
+@
+\end{column}
+\end{columns}
+\end{frame}
+
+\begin{frame}[fragile]
+\begin{columns}[b]
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig = true, eps = false>>=
+p <- qacf(testdf, show.sig = TRUE)
+print(p)
+@
+\end{column}
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig = true, eps = false>>=
+acf(testdf)
+@
+\end{column}
+\end{columns}
+\end{frame}
+
+
+
+\subsection{One Variable Plots}
+\begin{frame}[fragile]
+\frametitle{One Variable Plots} \framesubtitle{Autocorrelation}
+\begin{columns}[b]
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig = true, eps = false>>=
+p <- with(params, qacf(theta))
+print(p)
+@
+\end{column}
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig = true, eps = false>>=
+with(params, acf(theta))
+@
+\end{column}
+\end{columns}
+\end{frame}
+
+
+
+\begin{frame}[fragile]
+\frametitle{One Variable Plots} \framesubtitle{Partial Autocorrelation}
+\begin{columns}[b]
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig = true, eps = false>>=
+p <- with(params, qacf(theta, type = "partial", show.sig = TRUE))
+#p <- p + opts(title = expression(paste("PACF plot for ", theta)))
+print(p)
+@
+\end{column}
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig = true, eps = false>>=
+with(params, acf(theta, type = "partial"))
+@
+\end{column}
+\end{columns}
+\end{frame}
+
+
+
+\begin{frame}[fragile]
+\frametitle{One Variable Plots} \framesubtitle{Covariance}
+\begin{columns}[b]
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig = true, eps = false>>=
+p <- with(params, qacf(theta, type = "covariance"))
+p <- p + opts(title = expression(paste("Covariance plot for ", theta)))
+print(p)
+@
+\end{column}
+\begin{column}{0.5\textwidth}
+\scriptsize
+<<fig = true, eps = false>>=
+with(params, acf(theta, type = "covariance"))
+@
+\end{column}
+\end{columns}
+\end{frame}
+
+
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Closing}
+\subsection{Things to do}
+\begin{frame}
+\begin{itemize}
+	\item Add error handling
+	\item Add control on the facet labels - this is functionality needed in \texttt{ggplot2} before it can be added to my \texttt{qacf()} function.
+	\item Suppress the ``Using  as id variables'' message generated from the \texttt{melt()} function. 
+\end{itemize}
+\end{frame}
+
+
+\subsection{Some Resources for \texttt{ggplot2} and \texttt{Sweave}}
+\frame{
+
+\begin{itemize}
+	\item For \texttt{ggplot2}
+	\begin{itemize}
+	\item ggplot2 Google Group: \url{groups.google.com/group/ggplot2}
+	\item Hadley Wickham's website: \url{http://had.co.nz/ggplot2}
+	\item ``ggplot2 Elegant Graphics for Data Analysis'', by Hadley Wickham,  Springer, 2009
+	\end{itemize}
+	\item For \texttt{Sweave}
+	\begin{itemize}
+	\item User manual is actually very helpful for learning the options.
+	\item Best to see examples from other users and trial and error.
+	\item Remember that when using \texttt{Sweave} the code chunks will not work in many of the different environments in \LaTeX unless you have made the environment fragile.
+	\item Great example on R-Bloggers: \url{http://pineda-krch.com/2011/01/17/the-joy-of-sweave}
+	\end{itemize}
+\end{itemize}
+}
+
+
+\end{document}
+
